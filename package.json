@@ -1,0 +1,26 @@
+{
+  "name": "kausalyadrishti",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "KausalyaDrishti (\u0c95\u0ccc\u0cb6\u0cb2\u0ccd\u0caf \u0ca6\u0cc3\u0cb7\u0ccd\u0c9f\u0cbf) \u2014 AI-Based Real-Time Monitoring of Training Centres for Attendance and Infrastructure Compliance. Smart India Hackathon 2026, Problem Statement ID 26245, Ministry of Skill Development and Entrepreneurship (MSDE). Pilot: Tumakuru Skilling Cluster, Karnataka.",
+  "author": "Team KausalyaDrishti \u2014 SIH 2026",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 4173",
+    "start": "vite --host 0.0.0.0 --port 5173",
+    "smoke": "vite build --ssr test/harness.jsx --outDir build/testdist --emptyOutDir --logLevel warn && node test/setup.mjs",
+    "verify": "node verify.mjs"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^29.1.1",
+    "vite": "^5.4.11"
+  }
+}
