@@ -1,114 +1,132 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { trainingCentres, getCentreById, formatINR } from '../../data/centerMockData.js';
+import { buildCentreReport, buildBatchVerification } from '../../services/complianceRules.js';
+import AttendanceDiscrepancyCard from './AttendanceDiscrepancyCard.jsx';
+import InfraComplianceWidget from './InfraComplianceWidget.jsx';
+import SanctionedEquipList from './SanctionedEquipList.jsx';
+import { Panel, SeverityBadge } from '../common/Ui.jsx';
 
-function AuditDashboard() {
-  const [filter, setFilter] = useState('all');
+export default function AuditDashboard({
+  selectedCentreId = 'KA-TUM-0417',
+  onSelectCentre,
+  onEscalate,
+  pushToast,
+}) {
+  const [centreId, setCentreId] = useState(selectedCentreId);
+  const centre = useMemo(() => getCentreById(centreId) || trainingCentres[0], [centreId]);
+  
+  const [batchId, setBatchId] = useState(centre.batches[0]?.batchId);
 
-  const centers = [
-    { id: 'TC-KA-BLR-042', name: 'Electronic City PMKK Hub', location: 'Bengaluru, KA', bio: 42, cctv: 38, delta: 4, infra: '94%', risk: 'HIGH', status: 'Flagged for Audit' },
-    { id: 'TC-DL-NW-019', name: 'Rohini Skill Development Institute', location: 'North West Delhi, DL', bio: 30, cctv: 30, delta: 0, infra: '98%', risk: 'LOW', status: 'Compliant' },
-    { id: 'TC-MH-PUN-088', name: 'Hadapsar Technical Training Center', location: 'Pune, MH', bio: 55, cctv: 41, delta: 14, infra: '72%', risk: 'CRITICAL', status: 'Grant Withheld' },
-    { id: 'TC-UP-LKO-103', name: 'Gomti Nagar Skill Academy', location: 'Lucknow, UP', bio: 25, cctv: 24, delta: 1, infra: '91%', risk: 'LOW', status: 'Compliant' },
-    { id: 'TC-TN-CHN-054', name: 'Guindy Vocational Training Hub', location: 'Chennai, TN', bio: 40, cctv: 33, delta: 7, infra: '86%', risk: 'MEDIUM', status: 'Warning Sent' }
-  ];
+  // If centre changes, reset active batch to first batch of selected centre
+  const activeBatch = useMemo(() => {
+    return centre.batches.find((b) => b.batchId === batchId) || centre.batches[0];
+  }, [centre, batchId]);
+
+  const report = useMemo(() => buildCentreReport(centre), [centre]);
+  const verification = useMemo(() => buildBatchVerification(activeBatch, centre), [activeBatch, centre]);
+
+  const handleSelectCentre = (id) => {
+    setCentreId(id);
+    const newCentre = getCentreById(id);
+    if (newCentre && newCentre.batches.length > 0) {
+      setBatchId(newCentre.batches[0].batchId);
+    }
+    if (onSelectCentre) onSelectCentre(id);
+  };
 
   return (
-    <div className="kd-tab-page">
-      <div className="kd-page-header">
+    <div className="kd-audit-portal">
+      {/* Page Header */}
+      <div className="portal-header">
         <div>
-          <h2>Training Center Audit & Discrepancy Register</h2>
-          <p className="kd-text-muted">Automated cross-verification of Aadhaar Biometrics vs. AI Computer Vision Headcount</p>
+          <h2 className="portal-title">Training Centre Compliance & Discrepancy Audit Register</h2>
+          <p className="portal-subtitle">
+            Cross-Verification of SDMS Portal Claims vs. Computer Vision Physical Presence & Asset Inventory
+          </p>
         </div>
-        <div className="kd-actions-row">
-          <button className="kd-btn kd-btn-primary">📥 Export CSV Audit Report</button>
-        </div>
-      </div>
-
-      <div className="kd-grid-4col kd-mb-4">
-        <div className="kd-stat-box">
-          <div className="kd-stat-label">Total Centers Monitored</div>
-          <div className="kd-stat-value text-blue">14,820</div>
-          <div className="kd-stat-desc">Across 36 States/UTs</div>
-        </div>
-        <div className="kd-stat-box">
-          <div className="kd-stat-label">Total Verified Attendance</div>
-          <div className="kd-stat-value text-green">91.4%</div>
-          <div className="kd-stat-desc">Biometric Match Rate</div>
-        </div>
-        <div className="kd-stat-box kd-stat-danger">
-          <div className="kd-stat-label">Ghost Trainees Detected</div>
-          <div className="kd-stat-value text-red">3,420</div>
-          <div className="kd-stat-desc">Aadhaar fraud prevented</div>
-        </div>
-        <div className="kd-stat-box">
-          <div className="kd-stat-label">Estimated Public Funds Saved</div>
-          <div className="kd-stat-value text-purple">₹ 42.8 Cr</div>
-          <div className="kd-stat-desc">PMKVY Disbursement Shield</div>
+        <div className="portal-controls">
+          <button
+            type="button"
+            className="btn btn--danger"
+            onClick={() => onEscalate && onEscalate(centre.id)}
+          >
+            🏛️ Escalate to MSDE Console
+          </button>
         </div>
       </div>
 
-      <div className="kd-card">
-        <div className="kd-card-header kd-flex-between">
-          <h3>Real-Time Center Compliance Table</h3>
-          <div className="kd-filter-tabs">
-            <button className={'kd-filter-btn ' + (filter === 'all' ? 'active' : '')} onClick={() => setFilter('all')}>All (5)</button>
-            <button className={'kd-filter-btn ' + (filter === 'high' ? 'active' : '')} onClick={() => setFilter('high')}>High Risk Only</button>
-          </div>
+      {/* Centre Selection Cards Carousel / Grid */}
+      <Panel title="Monitored Skilling Centres — Karnataka Grid" icon="🏢" tone="default">
+        <div className="centre-cards-grid">
+          {trainingCentres.map((c) => {
+            const cReport = buildCentreReport(c);
+            const isSelected = c.id === centre.id;
+            return (
+              <div
+                key={c.id}
+                className={`centre-card ${isSelected ? 'is-selected' : ''} centre-card--${cReport.risk.key}`}
+                onClick={() => handleSelectCentre(c.id)}
+                role="button"
+                tabIndex={0}
+                aria-pressed={isSelected}
+              >
+                <div className="centre-card__head">
+                  <strong className="centre-card__name">{c.name}</strong>
+                  <SeverityBadge severity={cReport.risk} size="sm" showVerdict={false} />
+                </div>
+                <span className="centre-card__sub">{c.taluk}, {c.district} ({c.id})</span>
+                <div className="centre-card__stats">
+                  <span>Claimed: <b>{cReport.totalClaimed}</b></span>
+                  <span>Physical: <b className={cReport.totalGhosts > 0 ? 'text-red' : 'text-green'}>{cReport.totalPhysical}</b></span>
+                  <span>Ghosts: <b className={cReport.totalGhosts > 0 ? 'text-red' : ''}>{cReport.totalGhosts}</b></span>
+                </div>
+                <div className="centre-card__infra">
+                  <span>Infra Score: <b>{cReport.infra.score}%</b></span>
+                  <span>Leakage: <b>{formatINR(cReport.totalLeakage)}</b></span>
+                </div>
+              </div>
+            );
+          })}
         </div>
+      </Panel>
 
-        <div className="kd-table-responsive">
-          <table className="kd-table">
-            <thead>
-              <tr>
-                <th>Center ID & Name</th>
-                <th>Location</th>
-                <th>Aadhaar Biometric</th>
-                <th>AI Head Count</th>
-                <th>Discrepancy (Δ)</th>
-                <th>Infra Score</th>
-                <th>Risk Level</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {centers
-                .filter(c => filter === 'all' || (filter === 'high' && (c.risk === 'HIGH' || c.risk === 'CRITICAL')))
-                .map((c) => (
-                <tr key={c.id}>
-                  <td>
-                    <strong>{c.name}</strong>
-                    <div className="kd-text-muted">{c.id}</div>
-                  </td>
-                  <td>{c.location}</td>
-                  <td><span className="kd-pill pill-blue">{c.bio}</span></td>
-                  <td><span className="kd-pill pill-purple">{c.cctv}</span></td>
-                  <td>
-                    {c.delta > 0 ? (
-                      <span className="kd-text-danger font-bold">+{c.delta} Ghost</span>
-                    ) : (
-                      <span className="kd-text-green">0 (Exact)</span>
-                    )}
-                  </td>
-                  <td><strong>{c.infra}</strong></td>
-                  <td>
-                    <span className={'kd-risk-tag ' + (
-                      c.risk === 'CRITICAL' ? 'risk-critical' :
-                      c.risk === 'HIGH' ? 'risk-high' :
-                      c.risk === 'MEDIUM' ? 'risk-medium' : 'risk-low'
-                    )}>
-                      {c.risk}
-                    </span>
-                  </td>
-                  <td>
-                    <button className="kd-btn kd-btn-sm kd-btn-secondary">View CCTV Audit</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* Batch Switcher Tabs */}
+      <div className="batch-tabs-bar">
+        <span className="batch-tabs-label">Active Training Batches for {centre.name}:</span>
+        <div className="batch-tabs-list">
+          {centre.batches.map((b) => {
+            const bVerif = buildBatchVerification(b, centre);
+            const isBatchSelected = b.batchId === activeBatch.batchId;
+            const shortCode = b.batchId.split('/').pop();
+            return (
+              <button
+                key={b.batchId}
+                type="button"
+                className={`batch-tab-btn ${isBatchSelected ? 'active' : ''} batch-tab-btn--${bVerif.severity.key}`}
+                onClick={() => setBatchId(b.batchId)}
+              >
+                <span className="batch-tab-code">{shortCode}</span>
+                <span className="batch-tab-course">{b.course}</span>
+                <span className="batch-tab-badge">{bVerif.severity.verdict}</span>
+              </button>
+            );
+          })}
         </div>
+      </div>
+
+      {/* Main Attendance Discrepancy Card */}
+      <AttendanceDiscrepancyCard
+        centre={centre}
+        batch={activeBatch}
+        verification={verification}
+        onEscalate={onEscalate}
+        active={true}
+      />
+
+      {/* Infrastructure Verification Section */}
+      <div className="kd-infra-audit-row">
+        <InfraComplianceWidget centre={centre} pushToast={pushToast} />
       </div>
     </div>
   );
 }
-
-export default AuditDashboard;

@@ -16,8 +16,8 @@
  * ============================================================================
  */
 
-import { buildBatchVerification, equipmentRollup, buildCentreReport } from './complianceRules.js';
-import { edgePacketProfile, legacyStreamProfile, formatINR } from '../data/centerMockData.js';
+import { buildBatchVerification, equipmentRollup, buildCentreReport, enforcementEligibility } from './complianceRules.js';
+import { edgePacketProfile, legacyStreamProfile, formatINR, noticeTemplate } from '../data/centerMockData.js';
 
 export const LEGACY_MB_PER_HOUR = legacyStreamProfile.perHourMB;
 export const LEGACY_KB_PER_HOUR = LEGACY_MB_PER_HOUR * 1024; // 512,000 KB
@@ -325,14 +325,14 @@ export function linkFeasibility(profile, keyframes = 3) {
  * evidence annexures) that the District Skill Development Officer signs off.
  */
 export function generateShowCauseNotice(report, options = {}) {
-  const template = options.template;
+  const template = options.template || noticeTemplate;
   const now = options.now || new Date();
   const officer = template.issuingOfficer;
   const ref = `${template.referencePrefix}/${String(1024 + Math.floor(now.getTime() % 800)).padStart(4, '0')}`;
   const severity = report.risk;
   const infra = report.infra;
-  const eligibility = options.eligibility;
-  const replyBy = new Date(now.getTime() + template.timelineDays * 24 * 60 * 60 * 1000);
+  const eligibility = options.eligibility || enforcementEligibility(report);
+  const replyBy = new Date(now.getTime() + (template.timelineDays || 7) * 24 * 60 * 60 * 1000);
 
   const fmt = (d) =>
     d.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });

@@ -276,6 +276,8 @@ export function createLiveTracker() {
   };
 }
 
+export const createWebcamTracker = createLiveTracker;
+
 /**
  * Pure-integer motion segmentation: compares the current downsampled frame
  * against the previous one and the corner background sample, then groups hot

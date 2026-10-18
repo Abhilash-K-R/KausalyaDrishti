@@ -1,254 +1,334 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { getCentreById, trainingCentres } from '../../data/centerMockData.js';
+import { buildCentreReport, buildBatchVerification } from '../../services/complianceRules.js';
+import {
+  createScene,
+  renderSceneFrame,
+  createWebcamTracker,
+  renderTrackingFrame,
+  DETECTION_FPS,
+} from '../../services/edgePersonEngine.js';
+import { useRafLoop } from '../../hooks/useTicker.js';
+import AiDetector from './AiDetector.jsx';
+import PrivacyBlurToggle from './PrivacyBlurToggle.jsx';
+import BandwidthTelemetry from './BandwidthTelemetry.jsx';
+import { Panel } from '../common/Ui.jsx';
 
-function CameraFeedView() {
+export default function CameraFeedView({
+  selectedCentreId = 'KA-TUM-0417',
+  isPrivacyOn = true,
+  setIsPrivacyOn,
+  pushToast,
+}) {
+  const centre = useMemo(() => getCentreById(selectedCentreId) || trainingCentres[0], [selectedCentreId]);
+  const batch = centre.batches[0];
+  const report = useMemo(() => buildCentreReport(centre), [centre]);
+  const verification = useMemo(() => buildBatchVerification(batch, centre), [batch, centre]);
+
+  const [mode, setMode] = useState('sim'); // 'sim' | 'live'
+  const [privacy, setPrivacy] = useState(isPrivacyOn);
+  const [scanState, setScanState] = useState({ active: false, progress: 0 });
+  const [snapshots, setSnapshots] = useState([]);
+  const [webcamError, setWebcamError] = useState(null);
+  const [detections, setDetections] = useState({ trainees: [], machines: [], tools: [] });
+
+  const canvasRef = useRef(null);
   const videoRef = useRef(null);
-  const [isCameraActive, setIsCameraActive] = useState(false);
-  const [isPrivacyOn, setIsPrivacyOn] = useState(true);
-  const [cameraError, setCameraError] = useState(null);
+  const trackerRef = useRef(null);
 
-  // Live AI Telemetry States
-  const [biometricCount, setBiometricCount] = useState(42);
-  const [aiDetectedCount, setAiDetectedCount] = useState(38);
-  const [ghostTrainees, setGhostTrainees] = useState(4);
-  const [infraScore, setInfraScore] = useState(94);
-  const [lastHeartbeat, setLastHeartbeat] = useState(new Date().toLocaleTimeString());
+  // Sync privacy state with parent if provided
+  const handlePrivacyChange = (val) => {
+    setPrivacy(val);
+    if (setIsPrivacyOn) setIsPrivacyOn(val);
+  };
 
-  // Start / Stop Camera
-  const startCamera = async () => {
-    setCameraError(null);
+  // Re-build deterministic scene when centre/batch changes
+  const scene = useMemo(() => {
+    return createScene({
+      occupancy: batch.aiPhysical / batch.sanctionedStrength,
+      roster: batch.sanctionedStrength,
+      machines: report.infra.detectedUnits > 0 ? 6 : 0,
+      sanctionedMachines: 10,
+      tools: 5,
+      now: new Date(),
+      seed: `${centre.id}-${batch.batchId}`,
+    });
+  }, [centre.id, batch.batchId, batch.aiPhysical, batch.sanctionedStrength, report.infra.detectedUnits]);
+
+  // Handle Live Webcam toggle
+  const startWebcam = async () => {
+    setWebcamError(null);
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Webcam unavailable in this browser environment; falling back to simulated PMKVY feed.');
+      }
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 1280, height: 720 }
+        video: { width: 1280, height: 720 },
       });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play();
+        await videoRef.current.play();
       }
-      setIsCameraActive(true);
+      trackerRef.current = createWebcamTracker();
+      setMode('live');
+      pushToast?.({
+        tone: 'success',
+        title: 'Live Camera Connected',
+        message: 'Streaming from local camera. Integer RGB tracking active.',
+      });
     } catch (err) {
-      console.error("Camera access error:", err);
-      setCameraError("Camera permission denied or camera not found. Please allow webcam access in browser.");
+      console.warn('Webcam stream fallback:', err);
+      setWebcamError(err.message || 'Webcam unavailable');
+      setMode('sim');
+      pushToast?.({
+        tone: 'warning',
+        title: 'Webcam Fallback',
+        message: 'Webcam unavailable or permission denied — switching to simulated PMKVY workshop feed.',
+      });
     }
   };
 
-  const stopCamera = () => {
+  const stopWebcam = () => {
     if (videoRef.current && videoRef.current.srcObject) {
       const tracks = videoRef.current.srcObject.getTracks();
-      tracks.forEach(track => track.stop());
+      tracks.forEach((t) => t.stop());
       videoRef.current.srcObject = null;
     }
-    setIsCameraActive(false);
+    trackerRef.current = null;
+    setMode('sim');
   };
 
+  // Re-Scan Trigger Animation
+  const triggerReScan = () => {
+    if (scanState.active) return;
+    setScanState({ active: true, progress: 0 });
+    let p = 0;
+    const interval = window.setInterval(() => {
+      p += 10;
+      if (p > 100) {
+        window.clearInterval(interval);
+        setScanState({ active: false, progress: 100 });
+        pushToast?.({
+          tone: 'info',
+          title: 'Equipment Re-Scan Complete',
+          message: '6/10 sanctioned sewing machines physically verified on premise.',
+        });
+      } else {
+        setScanState({ active: true, progress: p });
+      }
+    }, 180);
+  };
+
+  // Capture Evidence snapshot
+  const captureEvidence = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    try {
+      const dataUrl = canvas.toDataURL('image/png');
+      const snap = {
+        id: `SNAP-${Date.now()}`,
+        time: new Date().toLocaleTimeString('en-IN'),
+        src: dataUrl,
+      };
+      setSnapshots((prev) => [snap, ...prev.slice(0, 3)]);
+      pushToast?.({
+        tone: 'success',
+        title: 'Evidence Captured',
+        message: `Keyframe attached to verification audit trail (${centre.id}).`,
+      });
+    } catch (e) {
+      console.warn('Snapshot capture failed:', e);
+    }
+  };
+
+  // 30-FPS RAF Rendering Loop
+  const { fpsValue } = useRafLoop(
+    (frameNo) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+
+      if (mode === 'live' && videoRef.current && videoRef.current.readyState >= 2) {
+        if (!trackerRef.current) trackerRef.current = createWebcamTracker();
+        const res = renderTrackingFrame(ctx, trackerRef.current, videoRef.current, {
+          frame: frameNo,
+          privacyOn: privacy,
+          scan: scanState,
+        });
+        if (res && res.trainees) setDetections(res);
+      } else {
+        const res = renderSceneFrame(ctx, scene, {
+          frame: frameNo,
+          privacyOn: privacy,
+          scan: scanState,
+        });
+        if (res && res.trainees) setDetections(res);
+      }
+    },
+    { fps: DETECTION_FPS, active: true }
+  );
+
   useEffect(() => {
-    const interval = setInterval(() => {
-      setLastHeartbeat(new Date().toLocaleTimeString());
-    }, 3000);
-    return () => {
-      clearInterval(interval);
-      stopCamera();
-    };
+    return () => stopWebcam();
   }, []);
 
   return (
-    <div className="kd-tab-page">
-      <div className="kd-page-header">
+    <div className="kd-edge-portal">
+      {/* Hidden video element for live webcam stream */}
+      <video ref={videoRef} playsInline muted style={{ display: 'none' }} />
+
+      {/* Header Bar */}
+      <div className="portal-header">
         <div>
-          <h2>Edge Camera Live Stream & AI Detection</h2>
-          <p className="kd-text-muted">TC-KA-BLR-042 • Electronic City PMKK Hub, Bengaluru • Room 102 (Electrician Batch)</p>
+          <h2 className="portal-title">Centre Edge AI Camera Feed</h2>
+          <p className="portal-subtitle">
+            {centre.name} · {centre.taluk}, {centre.district} ({centre.id}) · Batch {batch.batchId.split('/').pop()} ({batch.course})
+          </p>
         </div>
-        <div className="kd-actions-row">
-          {!isCameraActive ? (
-            <button className="kd-btn kd-btn-primary" onClick={startCamera}>
-              📹 Turn ON Laptop Camera
+
+        <div className="portal-controls">
+          <div className="btn-group">
+            <button
+              type="button"
+              className={`btn btn--sm ${mode === 'live' ? 'btn--primary' : 'btn--secondary'}`}
+              onClick={mode === 'live' ? stopWebcam : startWebcam}
+            >
+              📹 Live Webcam Stream
             </button>
-          ) : (
-            <button className="kd-btn kd-btn-danger" onClick={stopCamera}>
-              ⏹ Turn OFF Camera
+            <button
+              type="button"
+              className={`btn btn--sm ${mode === 'sim' ? 'btn--primary' : 'btn--secondary'}`}
+              onClick={() => {
+                stopWebcam();
+                setMode('sim');
+              }}
+            >
+              🎬 Simulated PMKVY Workshop Feed
             </button>
-          )}
-          <button 
-            className={'kd-btn ' + (isPrivacyOn ? 'kd-btn-success' : 'kd-btn-secondary')}
-            onClick={() => setIsPrivacyOn(!isPrivacyOn)}
+          </div>
+
+          <button
+            type="button"
+            className={`btn btn--sm ${privacy ? 'btn--success' : 'btn--danger'}`}
+            onClick={() => handlePrivacyChange(!privacy)}
           >
-            {isPrivacyOn ? '🛡️ Privacy Blur: ON (DPDP 2023)' : '🔓 Privacy Blur: OFF'}
+            {privacy ? '🔒 Privacy Blur: ON' : '🔓 Privacy Blur: OFF'}
+          </button>
+
+          <button
+            type="button"
+            className={`btn btn--sm ${scanState.active ? 'btn--warn is-scanning' : 'btn--secondary'}`}
+            onClick={triggerReScan}
+            disabled={scanState.active}
+          >
+            {scanState.active ? `Scanning (${scanState.progress}%) — RE-SCAN IN PROGRESS` : '🔄 Trigger Equipment Re-Scan'}
+          </button>
+
+          <button type="button" className="btn btn--sm btn--primary" onClick={captureEvidence}>
+            📸 Capture Evidence
           </button>
         </div>
       </div>
 
-      {cameraError && (
-        <div className="kd-alert kd-alert-danger">
-          ⚠️ {cameraError}
+      {webcamError && (
+        <div className="notice-banner notice-banner--warn">
+          <span>⚠️ {webcamError}</span>
         </div>
       )}
 
-      {/* Discrepancy Banner */}
-      {ghostTrainees > 0 && (
-        <div className="kd-alert kd-alert-warning kd-alert-pulse">
-          <div className="kd-alert-content">
-            <span className="kd-alert-icon">🚨</span>
-            <div>
-              <strong>Attendance Discrepancy Detected (D_att = 9.5%):</strong>{' '}
-              Aadhaar Biometric logged {biometricCount} students, but Edge AI detected only {aiDetectedCount} heads present in Room 102.{' '}
-              <span className="kd-text-danger font-bold">Possible {ghostTrainees} Ghost Trainees!</span>
+      {/* Main Grid: Feed + Telemetry */}
+      <div className="edge-grid">
+        {/* Left Column: Canvas Viewport */}
+        <div className="edge-viewport-col">
+          <Panel
+            title="Real-Time Computer Vision Detection Feed"
+            subtitle={`${mode === 'live' ? 'Live Webcam Segmenter' : 'Synthetic PMKVY Workshop Hall'} · Resolution: 640×384 (Scaled 2x)`}
+            icon="📹"
+            tone="default"
+            actions={
+              <div className="feed-badges">
+                <span className="chip chip--green">● 30 FPS ACTIVE</span>
+                <span className="chip chip--blue">{privacy ? '🔒 DPDP Face-Masked' : '⚠️ Raw Stream'}</span>
+              </div>
+            }
+          >
+            <div className="canvas-wrapper">
+              <canvas
+                ref={canvasRef}
+                className="feed-canvas"
+                width={640}
+                height={384}
+                style={{ width: '100%', height: 'auto', display: 'block', borderRadius: 8, background: '#0a0f18' }}
+              />
+
+              {scanState.active && (
+                <div className="scan-sweep-overlay">
+                  <div className="scan-line" style={{ top: `${scanState.progress}%` }} />
+                  <span className="scan-label">RE-SCAN IN PROGRESS · ASSET QR MATCHING</span>
+                </div>
+              )}
             </div>
-          </div>
-          <button className="kd-btn kd-btn-sm kd-btn-warning">Flag to MSDE</button>
-        </div>
-      )}
 
-      <div className="kd-grid-2col">
-        {/* Left Column: Video Container */}
-        <div className="kd-card kd-video-card">
-          <div className="kd-card-header">
-            <div className="kd-flex-between">
-              <span className="kd-badge kd-badge-live">● LIVE RTSP/CCTV STREAM</span>
-              <span className="kd-text-muted">Resolution: 720p • FPS: 15 (Edge Throttled)</span>
-            </div>
-          </div>
-
-          <div className="kd-video-viewport">
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline 
-              muted 
-              className={'kd-video-element ' + (isPrivacyOn ? 'kd-privacy-filter' : '')}
-            />
-
-            {!isCameraActive && (
-              <div className="kd-video-placeholder">
-                <div className="kd-placeholder-content">
-                  <div className="kd-placeholder-icon">📹</div>
-                  <h3>Webcam is Currently Inactive</h3>
-                  <p>Click "Turn ON Laptop Camera" above to test real-time edge processing.</p>
-                  <button className="kd-btn kd-btn-primary kd-mt-3" onClick={startCamera}>
-                    Enable Live Camera Feed
-                  </button>
+            {/* Evidence Snaps Row */}
+            {snapshots.length > 0 && (
+              <div className="evidence-strip">
+                <span className="evidence-title">Captured Audit Evidence Keyframes:</span>
+                <div className="evidence-thumbs">
+                  {snapshots.map((s) => (
+                    <div key={s.id} className="snap">
+                      <img src={s.src} alt="Evidence snapshot" />
+                      <span className="snap-time">{s.time}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
+          </Panel>
 
-            {isCameraActive && (
-              <div className="kd-video-overlay">
-                <div className="kd-overlay-tag top-left">
-                  <span>TC-042 [CAM-01] • 15 FPS</span>
-                </div>
-                <div className="kd-overlay-tag top-right">
-                  <span className={'kd-badge ' + (isPrivacyOn ? 'badge-green' : 'badge-red')}>
-                    {isPrivacyOn ? '🔒 DPDP Face-Masked' : '⚠️ Raw Stream'}
-                  </span>
-                </div>
-                <div className="kd-overlay-tag bottom-left">
-                  <span>AI Heads Detected: {aiDetectedCount}</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="kd-card-footer kd-flex-between">
-            <div><strong>Payload Size:</strong> 4.8 KB (Metadata JSON only - No raw video uploaded)</div>
-            <div><strong>Last Heartbeat:</strong> {lastHeartbeat}</div>
-          </div>
+          {/* AI Detector HUD & Classes */}
+          <AiDetector
+            detections={detections}
+            fps={fpsValue}
+            mode={mode}
+            privacyOn={privacy}
+            scanState={scanState}
+            roster={batch.sanctionedStrength}
+            sanctionedMachines={10}
+            activeHours={batch.activeHours}
+            batchId={batch.batchId}
+            withinBatchHours={true}
+          />
         </div>
 
-        {/* Right Column: AI Edge Telemetry */}
-        <div className="kd-column-stack">
-          {/* Quick Stat Cards */}
-          <div className="kd-grid-2x2">
-            <div className="kd-stat-box">
-              <div className="kd-stat-label">Biometric (Aadhaar) Log</div>
-              <div className="kd-stat-value text-blue">{biometricCount}</div>
-              <div className="kd-stat-desc">Smart Attendance Portal</div>
-            </div>
+        {/* Right Column: Privacy & Bandwidth Telemetry */}
+        <div className="edge-sidebar-col">
+          <PrivacyBlurToggle privacyOn={privacy} onChange={handlePrivacyChange} />
 
-            <div className="kd-stat-box">
-              <div className="kd-stat-label">CCTV Visual Head Count</div>
-              <div className="kd-stat-value text-purple">{aiDetectedCount}</div>
-              <div className="kd-stat-desc">YOLO-Edge Detector</div>
-            </div>
-
-            <div className="kd-stat-box kd-stat-danger">
-              <div className="kd-stat-label">Ghost Trainees Discrepancy</div>
-              <div className="kd-stat-value text-red">+{ghostTrainees}</div>
-              <div className="kd-stat-desc">Unverified Biometrics</div>
-            </div>
-
-            <div className="kd-stat-box">
-              <div className="kd-stat-label">Infra Compliance (C_infra)</div>
-              <div className="kd-stat-value text-green">{infraScore}%</div>
-              <div className="kd-stat-desc">Equipment & Safety Active</div>
-            </div>
-          </div>
-
-          {/* Infrastructure Inspection Checklist */}
-          <div className="kd-card">
-            <div className="kd-card-header">
-              <h3>Equipment & Safety Compliance (Mandatory)</h3>
-            </div>
-            <div className="kd-checklist">
-              <div className="kd-check-item">
-                <span className="kd-check-icon text-green">✅</span>
-                <div className="kd-check-info">
-                  <div className="kd-check-title">Electrician Training Workbench & Multimeters</div>
-                  <div className="kd-check-sub">6/6 Benches Detected & Active</div>
-                </div>
-                <span className="kd-badge badge-green">100% OK</span>
+          <Panel title="DPDP Act 2023 Compliance Guarantee" icon="🛡️" tone="privacy">
+            <div className="privacy-specs">
+              <div className="spec-row">
+                <span>Face embeddings stored:</span>
+                <strong className="text-green">0 (Zero Templates)</strong>
               </div>
-
-              <div className="kd-check-item">
-                <span className="kd-check-icon text-green">✅</span>
-                <div className="kd-check-info">
-                  <div className="kd-check-title">Fire Extinguisher & First-Aid Station</div>
-                  <div className="kd-check-sub">Visible in Room 102 Corner B</div>
-                </div>
-                <span className="kd-badge badge-green">Verified</span>
+              <div className="spec-row">
+                <span>Facial hash creation:</span>
+                <strong className="text-green">0 (Prohibited)</strong>
               </div>
-
-              <div className="kd-check-item">
-                <span className="kd-check-icon text-green">✅</span>
-                <div className="kd-check-info">
-                  <div className="kd-check-title">Certified Trainer In-Frame</div>
-                  <div className="kd-check-sub">Trainer ID: TR-8921 (Rajesh Kumar)</div>
-                </div>
-                <span className="kd-badge badge-green">Present</span>
+              <div className="spec-row">
+                <span>Raw identifiable video retention:</span>
+                <strong className="text-green">0-day (Buffer purged locally)</strong>
               </div>
-
-              <div className="kd-check-item">
-                <span className="kd-check-icon text-green">✅</span>
-                <div className="kd-check-info">
-                  <div className="kd-check-title">Camera Lens Tamper & Anti-Spoof</div>
-                  <div className="kd-check-sub">No lens cover or freeze frame loop</div>
-                </div>
-                <span className="kd-badge badge-green">Normal</span>
-              </div>
+              <p className="spec-note">
+                Strict adherence to Digital Personal Data Protection Act 2023 Section 7(1)(a). Only anonymous headcounts
+                and machine class counts leave the edge node.
+              </p>
             </div>
-          </div>
+          </Panel>
 
-          {/* Edge Payload Preview */}
-          <div className="kd-card">
-            <div className="kd-card-header kd-flex-between">
-              <h3>Edge JSON Payload (Bandwidth-Safe: &lt;5 KB)</h3>
-              <span className="kd-badge badge-blue">MQTT / HTTPS Sync</span>
-            </div>
-            <pre className="kd-code-block">
-{`{
-  "center_id": "TC-KA-BLR-042",
-  "room_id": "ROOM_102",
-  "timestamp": "${new Date().toISOString()}",
-  "biometric_claimed": ${biometricCount},
-  "cctv_heads_detected": ${aiDetectedCount},
-  "discrepancy_delta": ${ghostTrainees},
-  "infra_score": ${infraScore},
-  "dpdp_privacy_applied": ${isPrivacyOn},
-  "signature_sha256": "8f3b...e71c"
-}`}
-            </pre>
-          </div>
+          <BandwidthTelemetry report={report} centres={trainingCentres} />
         </div>
       </div>
     </div>
   );
 }
-
-export default CameraFeedView;

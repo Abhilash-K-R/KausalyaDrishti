@@ -65,8 +65,13 @@ Object.defineProperty(window.navigator, 'mediaDevices', { value: undefined, conf
 
 /* ------------------------------- globals ---------------------------------- */
 global.window = window;
+try {
+  Object.defineProperty(global, 'navigator', { value: window.navigator, configurable: true, writable: true });
+} catch {
+  // already defined or non-configurable
+}
+
 global.document = window.document;
-global.navigator = window.navigator;
 global.HTMLElement = window.HTMLElement;
 global.HTMLCanvasElement = window.HTMLCanvasElement;
 global.Element = window.Element;

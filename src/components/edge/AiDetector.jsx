@@ -47,7 +47,7 @@ export default function AiDetector({
       icon="🧠"
       actions={<span className={`live-tag ${fps > 0 ? 'is-live' : ''}`}><i className="pulse-dot" />{mode === 'live' ? 'WEBCAM' : 'SCENE'} · {fps} FPS</span>}
     >
-      <div className="detector-hud">
+      <div className="hud detector-hud">
         <div className="detector-hud__primary">
           <span className="detector-hud__label">Physical Headcount</span>
           <span className="detector-hud__value">
@@ -70,7 +70,7 @@ export default function AiDetector({
           </span>
         </div>
         <div className="detector-hud__primary">
-          <span className="detector-hud__label">AI Detection Throughput</span>
+          <span className="detector-hud__label">AI Detection FPS</span>
           <span className="detector-hud__value">
             {fps} <small>FPS</small>
           </span>
