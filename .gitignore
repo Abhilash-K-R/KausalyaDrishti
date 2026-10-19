@@ -23,5 +23,8 @@ Thumbs.db
 .env.local
 .env.*.local
 
-# Personal interview preparation notes (local only)
+# Personal local notes & assistant workspace rules (local only)
+self/
 abhi.md
+GEMINI.md
+.agents/
